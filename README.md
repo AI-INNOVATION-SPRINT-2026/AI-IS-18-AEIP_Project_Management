@@ -111,14 +111,10 @@ The system uses synthetic data to simulate real organizational workflows while f
 
 ---
 
-## 12. Contributors
-- **Janvi Kishor Patil** – AI Architecture, RAG, Documentation  
-- **Sanika** – Product Design & Workflow Modeling  
-- **Faijal Shaikh** – Frontend Engineering & Agent Loop  
 
 ---
 
-## 13. References
+## 12. References
 - FAISS Documentation  
 - Agentic AI Research Papers  
 - RAG Architecture References  
