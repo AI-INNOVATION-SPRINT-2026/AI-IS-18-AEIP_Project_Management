@@ -1,5 +1,6 @@
 import faiss
 import numpy as np
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Optional

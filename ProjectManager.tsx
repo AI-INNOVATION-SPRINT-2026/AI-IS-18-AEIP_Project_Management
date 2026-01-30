@@ -10,7 +10,7 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser }) =
     const [projects, setProjects] = useState<Project[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [newProject, setNewProject] = useState({ name: '', description: '' });
+    const [newProject, setNewProject] = useState<{ name: string; description: string; leadId?: string }>({ name: '', description: '' });
 
     useEffect(() => {
         // Load Projects
@@ -40,13 +40,17 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser }) =
             name: newProject.name,
             description: newProject.description,
             orgId: MOCK_ORG_ID,
+            leadId: newProject.leadId,
             memberIds: [],
             status: 'ACTIVE',
             createdAt: Date.now(),
         };
         saveProjects([...projects, project]);
         setShowCreateModal(false);
-        setNewProject({ name: '', description: '' });
+        setNewProject({ name: '', description: '', leadId: '' });
+
+        // Simple visual feedback
+        alert(`Project "${newProject.name}" created successfully!`);
     };
 
     const handleAssignLead = (projectId: string, leadId: string) => {
@@ -101,22 +105,41 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser }) =
                     <div className="bg-white p-6 rounded-xl w-96 shadow-2xl">
                         <h3 className="font-bold mb-4">Create New Project</h3>
                         <form onSubmit={handleCreateProject} className="space-y-4">
-                            <input
-                                placeholder="Project Name"
-                                required
-                                className="w-full px-3 py-2 border rounded-lg text-sm"
-                                value={newProject.name}
-                                onChange={e => setNewProject({ ...newProject, name: e.target.value })}
-                            />
-                            <textarea
-                                placeholder="Description"
-                                className="w-full px-3 py-2 border rounded-lg text-sm"
-                                value={newProject.description}
-                                onChange={e => setNewProject({ ...newProject, description: e.target.value })}
-                            />
-                            <div className="flex justify-end gap-2">
-                                <button type="button" onClick={() => setShowCreateModal(false)} className="px-3 py-1 text-xs font-bold text-slate-500">Cancel</button>
-                                <button type="submit" className="px-3 py-1 bg-indigo-500 text-white text-xs font-bold rounded-lg">Create</button>
+                            <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Project Name</label>
+                                <input
+                                    placeholder="e.g. Q1 Marketing Campaign"
+                                    required
+                                    className="w-full px-3 py-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={newProject.name}
+                                    onChange={e => setNewProject({ ...newProject, name: e.target.value })}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
+                                <textarea
+                                    placeholder="Brief description of the initiative..."
+                                    className="w-full px-3 py-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px]"
+                                    value={newProject.description}
+                                    onChange={e => setNewProject({ ...newProject, description: e.target.value })}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assign Team Lead (Optional)</label>
+                                <select
+                                    className="w-full px-3 py-2 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={newProject.leadId || ''}
+                                    onChange={e => setNewProject({ ...newProject, leadId: e.target.value })}
+                                >
+                                    <option value="">-- Select Team Lead --</option>
+                                    {availableLeads.map(u => (
+                                        <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={() => setShowCreateModal(false)} className="px-3 py-2 text-xs font-bold text-slate-500 hover:text-slate-700">Cancel</button>
+                                <button type="submit" className="px-4 py-2 bg-indigo-500 text-white text-xs font-bold rounded-lg hover:bg-indigo-600 shadow-lg shadow-indigo-500/20">Create Project</button>
                             </div>
                         </form>
                     </div>

@@ -14,21 +14,38 @@ import { initMemories } from './vectorStore';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [logs, setLogs] = useState<DecisionLog[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [lastRun, setLastRun] = useState<number>(Date.now());
 
-  // Restore session
+  // Restore session and load tasks from localStorage
   useEffect(() => {
     const savedUser = localStorage.getItem('AEIP_CURRENT_USER');
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
     }
+
+    // Load tasks from localStorage or use initial tasks
+    const savedTasks = localStorage.getItem('AEIP_TASKS');
+    if (savedTasks) {
+      setTasks(JSON.parse(savedTasks));
+    } else {
+      setTasks(INITIAL_TASKS);
+      localStorage.setItem('AEIP_TASKS', JSON.stringify(INITIAL_TASKS));
+    }
+
     // Initialize RAG Service with mock data
     initMemories();
   }, []);
+
+  // Save tasks to localStorage whenever they change
+  useEffect(() => {
+    if (tasks.length > 0) {
+      localStorage.setItem('AEIP_TASKS', JSON.stringify(tasks));
+    }
+  }, [tasks]);
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
@@ -110,6 +127,13 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!currentUser) return;
     const formData = new FormData(e.currentTarget);
+    const assigneeId = formData.get('assigneeId') as string || currentUser.id;
+
+    // Get the assignee's team and dept info
+    const storedUsersStr = localStorage.getItem('AEIP_USERS');
+    const allUsers = storedUsersStr ? JSON.parse(storedUsersStr) : USERS;
+    const assignee = allUsers.find((u: User) => u.id === assigneeId) || currentUser;
+
     const newTask: Task = {
       id: `TASK-${Date.now()}`,
       title: formData.get('title') as string,
@@ -117,9 +141,9 @@ const App: React.FC = () => {
       status: TaskStatus.CREATED,
       priority: formData.get('priority') as any,
       deadline: Date.now() + parseInt(formData.get('deadline') as string) * 60 * 1000,
-      assigneeId: formData.get('assigneeId') as string || currentUser.id,
-      teamId: currentUser.teamId,
-      deptId: currentUser.deptId,
+      assigneeId: assigneeId,
+      teamId: assignee.teamId,  // Use assignee's teamId, not creator's
+      deptId: assignee.deptId,   // Use assignee's deptId, not creator's
       orgId: 'ORG-001',
       riskScore: 0,
       lastAction: ActionType.NONE,
@@ -127,6 +151,14 @@ const App: React.FC = () => {
     };
     setTasks(prev => [newTask, ...prev]);
     e.currentTarget.reset();
+  };
+
+  const handleUpdateTaskStatus = (taskId: string, newStatus: TaskStatus) => {
+    setTasks(prev => prev.map(task =>
+      task.id === taskId
+        ? { ...task, status: newStatus, updatedAt: Date.now() }
+        : task
+    ));
   };
 
   if (!currentUser) {
@@ -231,6 +263,10 @@ const App: React.FC = () => {
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Workflow Target</label>
                     <input name="title" required className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium" placeholder="e.g. Critical Bug Fix: Payment Gateway" />
                   </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
+                    <textarea name="description" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium" placeholder="Brief description of the task..." rows={1} />
+                  </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Urgency</label>
                     <select name="priority" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium">
@@ -246,9 +282,13 @@ const App: React.FC = () => {
                   <div className="md:col-span-4 flex gap-2">
                     <select name="assigneeId" className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium">
                       <option value="">Auto-Assign (Based on Reliability)</option>
-                      {USERS.filter(u => u.deptId === currentUser.deptId || currentUser.role === UserRole.ADMIN).map(u => (
-                        <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
-                      ))}
+                      {(() => {
+                        const storedUsersStr = localStorage.getItem('AEIP_USERS');
+                        const allUsers = storedUsersStr ? JSON.parse(storedUsersStr) : USERS;
+                        return allUsers.filter((u: User) => u.deptId === currentUser.deptId || currentUser.role === UserRole.ADMIN).map((u: User) => (
+                          <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                        ));
+                      })()}
                     </select>
                     <button type="submit" className="bg-slate-800 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-600 transition shadow-lg shadow-slate-800/10">Deploy</button>
                   </div>
@@ -294,6 +334,7 @@ const App: React.FC = () => {
                       <th className="px-6 py-4">TTL</th>
                       <th className="px-6 py-4">Execution Risk</th>
                       <th className="px-6 py-4">Agentic Response</th>
+                      {currentUser.role === UserRole.ASSIGNEE && <th className="px-6 py-4">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -347,6 +388,21 @@ const App: React.FC = () => {
                             </span>
                           </div>
                         </td>
+                        {currentUser.role === UserRole.ASSIGNEE && task.assigneeId === currentUser.id && (
+                          <td className="px-6 py-4">
+                            <select
+                              className="px-3 py-1 text-xs border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                              value={task.status}
+                              onChange={(e) => handleUpdateTaskStatus(task.id, e.target.value as TaskStatus)}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value={TaskStatus.CREATED}>Created</option>
+                              <option value={TaskStatus.IN_PROGRESS}>In Progress</option>
+                              <option value={TaskStatus.SUBMITTED}>Submitted</option>
+                              <option value={TaskStatus.COMPLETED}>Completed</option>
+                            </select>
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {filteredTasks.length === 0 && (
