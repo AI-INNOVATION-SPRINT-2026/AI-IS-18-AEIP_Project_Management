@@ -8,7 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # MongoDB Configuration
+<<<<<<< HEAD
 MONGODB_URI ='mongodb://localhost:27017'
+=======
+MONGODB_URI ='mongodb+srv://janhavi08511:jkp%2347@cluster0.a1hn6bf.mongodb.net/User_db'
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
 DATABASE_NAME = os.getenv("DATABASE_NAME", "aeip_db")
 
 # Global MongoDB client

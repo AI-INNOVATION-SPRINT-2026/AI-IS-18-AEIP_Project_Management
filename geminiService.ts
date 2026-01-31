@@ -1,7 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 import { Task, ActionType, User } from "./types";
 
+<<<<<<< HEAD
 const apiKey = "AIzaSyBrpY2HxWct283pWc6jB-jllW88MdjWMmU"; // hardcoded
+=======
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
 
 if (!apiKey) {
   console.warn("GEMINI_API_KEY not found. LLM explanations will use fallback.");
@@ -56,7 +60,11 @@ export async function generateDecisionExplanation(
 
   try {
     const response = await ai.models.generateContent({
+<<<<<<< HEAD
       model: 'gemini-2.0-flash',
+=======
+      model: 'gemini-1.5-flash',
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
       contents: prompt,
       config: {
         temperature: 0.7,

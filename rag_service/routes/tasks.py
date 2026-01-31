@@ -43,6 +43,7 @@ async def create_task(task_data: TaskCreate):
         }).to_list(1000)
         
         if users:
+<<<<<<< HEAD
             # Enhanced AI auto-assignment: Skills + Reliability + Workload
             best_match = None
             best_score = -1.0
@@ -97,6 +98,21 @@ async def create_task(task_data: TaskCreate):
             if best_match:
                 assignee_id = best_match["id"]
                 print(f"✅ AI Selected: {best_match.get('name')} (Score: {best_score:.2f})")
+=======
+            print(f"🤖 AI Auto-Assign: Analyzing {len(users)} candidates for task '{task_data.title}'")
+            
+            from services.agentic_assignment import autonomous_assignment_inference
+            
+            # Convert users (dicts) to list of dicts if needed (already dicts from Mongo)
+            # Run AI Inference
+            ai_assignment = await autonomous_assignment_inference(task_data.model_dump(), users)
+            
+            if ai_assignment and ai_assignment.get("selected_user_id"):
+                assignee_id = ai_assignment["selected_user_id"]
+                print(f"✅ AI Selected: {assignee_id} (Reason: {ai_assignment.get('reasoning')})")
+            else:
+                 print("⚠️ AI Assignment returned no result, falling back.")
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
     
     # If still no assignee, assign to task creator (fallback)
     if not assignee_id:
@@ -186,17 +202,25 @@ async def delete_task(task_id: str):
 @router.post("/{task_id}/complete", response_model=Task)
 async def complete_task(task_id: str, completion_data: TaskComplete):
     """
+<<<<<<< HEAD
     Mark task as completed and record performance metrics.
     This triggers AI learning by updating the assignee's performance score.
     """
     from services.performance_service import record_task_completion
     
+=======
+    Mark task as completed.
+    Triggers AEIP-Core Autonomous Execution intelligence.
+    INFERs quality and effort instead of asking user.
+    """
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
     db = get_database()
     
     # Check if task exists
     task = await db.tasks.find_one({"id": task_id})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+<<<<<<< HEAD
     
     # Record completion and update performance
     await record_task_completion(
@@ -209,3 +233,41 @@ async def complete_task(task_id: str, completion_data: TaskComplete):
     # Return updated task
     updated_task = await db.tasks.find_one({"id": task_id})
     return updated_task
+=======
+        
+    # If user provided manual data (legacy), use it? 
+    # The requirement is "No human should enter ratings". 
+    # So we prefer the Agentic approach unless explicitly blocked (task.md constraints).
+    # We will ALWAYS run the autonomous inference to generate the narrative/learning.
+    
+    from services.agentic_completion import process_task_completion
+    
+    try:
+        # Run Autonomous Phase 3
+        result = await process_task_completion(task_id, db)
+        
+        updated_task = result["task"]
+        ai_narrative = result["ai_result"]["narrative"]
+        
+        # Determine if we should add to Vector Memory
+        # In a real microservice, we would emit an event. 
+        # Here we can print it for the logs or handle it.
+        print(f"✅ AEIP Memory Generated: {result['new_memory_text']}")
+        
+        # Note: To persist this into FAISS, we would call the /add endpoint.
+        # For this prototype, we log the intent. 
+        # Ideally: await add_memory_internal(result['new_memory_text'])
+        
+        return updated_task
+        
+    except Exception as e:
+        print(f"⚠️ Autonomous Completion Failed: {e}")
+        # Fallback to simple completion
+        update_data = {
+            "status": "COMPLETED",
+            "completedAt": int(datetime.utcnow().timestamp() * 1000),
+            "lastAction": "MANUAL_COMPLETE_FALLBACK"
+        }
+        await db.tasks.update_one({"id": task_id}, {"$set": update_data})
+        return await db.tasks.find_one({"id": task_id})
+>>>>>>> 071115c4152687fb8ecedfdd23405a863836cf9a
