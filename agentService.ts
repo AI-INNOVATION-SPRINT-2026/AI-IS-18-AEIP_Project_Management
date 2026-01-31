@@ -28,7 +28,8 @@ export const runMonitoringCycle = async (
     // Only monitor active tasks
     if ([TaskStatus.COMPLETED, TaskStatus.SUBMITTED].includes(task.status)) continue;
 
-    const user = users.find(u => u.id === task.assigneeId)!;
+    const user = users.find(u => u.id === task.assigneeId);
+    if (!user) continue;
 
     // 1. COMPUTE (SLM-first)
     const { riskScore, action, escalationPath } = computeDecision(task, user, now);

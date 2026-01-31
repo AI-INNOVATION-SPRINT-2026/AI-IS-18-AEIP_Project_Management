@@ -30,7 +30,8 @@ export interface User {
   role: UserRole;
   teamId: string;
   deptId: string;
-  reliabilityScore: number; // 0-1
+  reliabilityScore: number; // 0-1 (displayed as 0-10 in UI)
+  skills: string[]; // User's skillset
   email?: string; // Added for login
   password?: string; // Added for login (mock)
 }
@@ -65,11 +66,16 @@ export interface Task {
   status: TaskStatus;
   priority: 'LOW' | 'MEDIUM' | 'HIGH';
   deadline: number; // timestamp
+  startDate: number; // Planned start
+  estimatedDuration: number; // in minutes
+  dependencies: string[]; // Task IDs
+  actualStartDate?: number;
   assigneeId: string;
   teamId: string;
   deptId: string;
   orgId: string;
   projectId?: string; // Linked to Project
+  requiredSkills?: string[]; // Skills needed for this task
   riskScore: number;
   lastAction: ActionType;
   updatedAt: number;

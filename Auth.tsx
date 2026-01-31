@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { User, UserRole, Department, Team } from './types';
-import { MOCK_ORG_ID, USERS } from './mockData';
+import { User, UserRole } from './types';
+import { MOCK_ORG_ID } from './mockData';
+import { ALL_SKILLS } from './constants';
+import { userAPI } from './api/client';
 
 interface AuthProps {
     onLogin: (user: User) => void;
@@ -14,149 +16,184 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         password: '',
         role: UserRole.ASSIGNEE,
     });
+    const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
     const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
         setError(null);
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSkillToggle = (skill: string) => {
+        setSelectedSkills(prev =>
+            prev.includes(skill)
+                ? prev.filter(s => s !== skill)
+                : [...prev, skill]
+        );
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
+        setLoading(true);
 
-        // Initial simple storage logic
-        const storedUsersStr = localStorage.getItem('AEIP_USERS');
-        const storedUsers: User[] = storedUsersStr ? JSON.parse(storedUsersStr) : [...USERS]; // Fallback to mock users if empty
-
-        if (isLogin) {
-            let user = storedUsers.find(
-                u => (u.email === formData.email || u.name === formData.email) && (u.password === formData.password || !u.password) // Allow name login for mock users
-            );
-
-            // Fallback: Check hardcoded USERS if not found in local storage (handles updates to mockData.ts)
-            if (!user) {
-                user = USERS.find(
-                    u => (u.email === formData.email || u.name === formData.email) && (u.password === formData.password || !u.password)
-                );
-            }
-
-            if (user) {
+        try {
+            if (isLogin) {
+                // Login using MongoDB API
+                const user = await userAPI.login({
+                    email: formData.email,
+                    password: formData.password
+                });
                 onLogin(user);
             } else {
-                setError("Invalid credentials");
+                // Register using MongoDB API
+                const newUser = await userAPI.register({
+                    name: formData.name,
+                    email: formData.email,
+                    password: formData.password,
+                    role: formData.role,
+                    skills: selectedSkills.length > 0 ? selectedSkills : ['General']
+                });
+                onLogin(newUser);
             }
-        } else {
-            // Register
-            if (storedUsers.some(u => u.email === formData.email)) {
-                setError("User already exists");
-                return;
-            }
-
-            const newUser: User = {
-                id: `USER-${Date.now()}`,
-                name: formData.name,
-                email: formData.email,
-                password: formData.password,
-                role: formData.role,
-                teamId: 'UNASSIGNED', // Will be assigned later
-                deptId: 'UNASSIGNED',
-                reliabilityScore: 0.5, // Start neutral
-            };
-
-            const updatedUsers = [...storedUsers, newUser];
-            localStorage.setItem('AEIP_USERS', JSON.stringify(updatedUsers));
-            onLogin(newUser);
+        } catch (err: any) {
+            setError(err.message || 'An error occurred. Make sure MongoDB backend is running.');
+            console.error('Auth error:', err);
+        } finally {
+            setLoading(false);
         }
     };
 
     return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6">
-            <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-2xl">
-                <div className="text-center mb-8">
-                    <div className="inline-block w-12 h-12 bg-indigo-500 rounded-xl flex items-center justify-center text-white text-xl font-bold mb-4 shadow-lg shadow-indigo-500/20">AE</div>
-                    <h1 className="text-2xl font-bold text-white mb-2">{isLogin ? 'Welcome Back' : 'Join the Organization'}</h1>
-                    <p className="text-slate-400 text-sm">Agentic Execution Intelligence Platform</p>
-                </div>
-
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    {!isLogin && (
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Full Name</label>
-                            <input
-                                name="name"
-                                type="text"
-                                required
-                                className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-                                placeholder="John Doe"
-                                value={formData.name}
-                                onChange={handleChange}
-                            />
-                        </div>
-                    )}
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Email / ID</label>
-                        <input
-                            name="email"
-                            type="text" // Allow text for mock usernames
-                            required
-                            className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-                            placeholder="john@example.com"
-                            value={formData.email}
-                            onChange={handleChange}
-                        />
+            <div className="w-full max-w-md">
+                <div className="bg-white rounded-2xl shadow-2xl p-8">
+                    <div className="text-center mb-8">
+                        <h1 className="text-3xl font-bold text-slate-900 mb-2">
+                            {isLogin ? 'Welcome Back' : 'Create Account'}
+                        </h1>
+                        <p className="text-slate-600">
+                            {isLogin ? 'Sign in to your account' : 'Register to get started'}
+                        </p>
                     </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Password</label>
-                        <input
-                            name="password"
-                            type="password"
-                            required
-                            className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-                            value={formData.password}
-                            onChange={handleChange}
-                        />
-                    </div>
-
-                    {!isLogin && (
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Role</label>
-                            <select
-                                name="role"
-                                className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-                                value={formData.role}
-                                onChange={handleChange}
-                            >
-                                <option value={UserRole.ADMIN}>Organization</option>
-                                <option value={UserRole.TEAM_LEAD}>Team Lead</option>
-                                <option value={UserRole.ASSIGNEE}>Employee</option>
-                            </select>
-                        </div>
-                    )}
 
                     {error && (
-                        <div className="bg-red-500/10 text-red-400 text-xs p-3 rounded-lg border border-red-500/20 text-center">
+                        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
                             {error}
                         </div>
                     )}
 
-                    <button
-                        type="submit"
-                        className="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-lg transition shadow-lg shadow-indigo-500/25 mt-6"
-                    >
-                        {isLogin ? 'Login' : 'create account'}
-                    </button>
-                </form>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        {!isLogin && (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Full Name
+                                </label>
+                                <input
+                                    type="text"
+                                    name="name"
+                                    value={formData.name}
+                                    onChange={handleChange}
+                                    required
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                                    placeholder="John Doe"
+                                />
+                            </div>
+                        )}
 
-                <div className="mt-6 text-center">
-                    <button
-                        onClick={() => setIsLogin(!isLogin)}
-                        className="text-xs text-slate-500 hover:text-white transition underline"
-                    >
-                        {isLogin ? "Need an account? Register" : "Already have an account? Login"}
-                    </button>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">
+                                Email
+                            </label>
+                            <input
+                                type="email"
+                                name="email"
+                                value={formData.email}
+                                onChange={handleChange}
+                                required
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                                placeholder="you@example.com"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">
+                                Password
+                            </label>
+                            <input
+                                type="password"
+                                name="password"
+                                value={formData.password}
+                                onChange={handleChange}
+                                required
+                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                                placeholder="••••••••"
+                            />
+                        </div>
+
+                        {!isLogin && (
+                            <>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                                        Role
+                                    </label>
+                                    <select
+                                        name="role"
+                                        value={formData.role}
+                                        onChange={handleChange}
+                                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                                    >
+                                        <option value={UserRole.ASSIGNEE}>Employee</option>
+                                        <option value={UserRole.TEAM_LEAD}>Team Lead</option>
+                                        <option value={UserRole.MANAGER}>Manager</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                                        Skills (Select all that apply)
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2 border border-slate-200 rounded-lg">
+                                        {ALL_SKILLS.slice(0, 20).map(skill => (
+                                            <label key={skill} className="flex items-center space-x-2 cursor-pointer hover:bg-slate-50 p-1 rounded">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedSkills.includes(skill)}
+                                                    onChange={() => handleSkillToggle(skill)}
+                                                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                />
+                                                <span className="text-sm text-slate-700">{skill}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Selected: {selectedSkills.length > 0 ? selectedSkills.join(', ') : 'None'}
+                                    </p>
+                                </div>
+                            </>
+                        )}
+
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {loading ? 'Please wait...' : (isLogin ? 'Sign In' : 'Create Account')}
+                        </button>
+                    </form>
+
+                    <div className="mt-6 text-center">
+                        <button
+                            onClick={() => {
+                                setIsLogin(!isLogin);
+                                setError(null);
+                            }}
+                            className="text-indigo-600 hover:text-indigo-700 font-medium text-sm"
+                        >
+                            {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

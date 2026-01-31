@@ -1,5 +1,6 @@
 import faiss
 import numpy as np
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -40,7 +41,7 @@ app = FastAPI(title="AEIP RAG Microservice")
 # Allow CORS for React app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,8 +64,9 @@ print("Model Loaded.")
 def get_embedding(text: str) -> np.ndarray:
     # Encode and normalize for cosine similarity
     vec = model.encode([text])[0]
-    faiss.normalize_L2(np.array([vec]).astype('float32'))
-    return vec
+    vec_np = vec.astype('float32').reshape(1, -1)
+    faiss.normalize_L2(vec_np)  # Modifies in-place
+    return vec_np[0]  # Return flattened vector
 
 # --- Endpoints ---
 
@@ -164,6 +166,34 @@ def search_memories(query: SearchQuery):
             break
             
     return results
+
+# ===== MongoDB Integration =====
+# Import routes
+from database import connect_to_mongo, close_mongo_connection
+from routes import users, projects, tasks, gantt
+
+# Register API Routes
+app.include_router(users.router)
+app.include_router(projects.router)
+app.include_router(tasks.router)
+app.include_router(gantt.router, prefix="/gantt", tags=["Gantt"])
+
+# Startup and Shutdown Events
+@app.on_event("startup")
+async def startup_event():
+    """Initialize MongoDB connection on startup"""
+    try:
+        await connect_to_mongo()
+        print("🚀 AEIP Backend with MongoDB started successfully")
+    except Exception as e:
+        print(f"⚠️  MongoDB connection failed: {e}")
+        print("📝 RAG service will continue without MongoDB")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close MongoDB connection on shutdown"""
+    await close_mongo_connection()
+    print("👋 AEIP Backend shutdown complete")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

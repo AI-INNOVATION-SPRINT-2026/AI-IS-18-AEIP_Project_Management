@@ -15,12 +15,12 @@ export const TEAMS: Team[] = [
 ];
 
 export const USERS: User[] = [
-  { id: 'USER-01', name: 'Alex Johnson', role: UserRole.ASSIGNEE, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.85 },
-  { id: 'USER-02', name: 'Sarah Chen', role: UserRole.TEAM_LEAD, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.95 },
-  { id: 'USER-03', name: 'Mike Ross', role: UserRole.TEAM_LEAD, teamId: 'TEAM-02', deptId: 'DEPT-01', reliabilityScore: 0.90 },
-  { id: 'USER-04', name: 'Jordan Smith', role: UserRole.MANAGER, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.98 },
-  { id: 'USER-05', name: 'Lisa Ray', role: UserRole.TEAM_LEAD, teamId: 'TEAM-03', deptId: 'DEPT-02', reliabilityScore: 0.80 },
-  { id: 'USER-06', name: 'System Admin', role: UserRole.ADMIN, teamId: 'SYSTEM', deptId: 'SYSTEM', reliabilityScore: 1.0, email: 'admin@aeip.com', password: 'admin' },
+  { id: 'USER-01', name: 'Alex Johnson', role: UserRole.ASSIGNEE, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.85, skills: ['JavaScript', 'React', 'Node.js', 'MongoDB'] },
+  { id: 'USER-02', name: 'Sarah Chen', role: UserRole.TEAM_LEAD, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.95, skills: ['Project Management', 'Agile', 'JavaScript', 'Team Leadership'] },
+  { id: 'USER-03', name: 'Mike Ross', role: UserRole.TEAM_LEAD, teamId: 'TEAM-02', deptId: 'DEPT-01', reliabilityScore: 0.90, skills: ['DevOps', 'AWS', 'Docker', 'Kubernetes', 'CI/CD'] },
+  { id: 'USER-04', name: 'Jordan Smith', role: UserRole.MANAGER, teamId: 'TEAM-01', deptId: 'DEPT-01', reliabilityScore: 0.98, skills: ['Stakeholder Management', 'Budget Planning', 'Agile', 'Project Management'] },
+  { id: 'USER-05', name: 'Lisa Ray', role: UserRole.TEAM_LEAD, teamId: 'TEAM-03', deptId: 'DEPT-02', reliabilityScore: 0.80, skills: ['Communication', 'User Research', 'Project Management'] },
+  { id: 'USER-06', name: 'System Admin', role: UserRole.ADMIN, teamId: 'SYSTEM', deptId: 'SYSTEM', reliabilityScore: 1.0, email: 'admin@aeip.com', password: 'admin', skills: ['System Administration', 'Security', 'Monitoring'] },
 ];
 
 const NOW = Date.now();
@@ -34,6 +34,9 @@ export const INITIAL_TASKS: Task[] = [
     status: TaskStatus.IN_PROGRESS,
     priority: 'HIGH',
     deadline: NOW + ONE_HOUR * 2, // 2 hours from now
+    startDate: NOW,
+    estimatedDuration: 120, // 2 hours
+    dependencies: [],
     assigneeId: 'USER-01',
     teamId: 'TEAM-01',
     deptId: 'DEPT-01',
@@ -49,6 +52,9 @@ export const INITIAL_TASKS: Task[] = [
     status: TaskStatus.CREATED,
     priority: 'MEDIUM',
     deadline: NOW - ONE_HOUR * 1, // Already overdue!
+    startDate: NOW - ONE_HOUR * 5,
+    estimatedDuration: 240, // 4 hours
+    dependencies: [],
     assigneeId: 'USER-01',
     teamId: 'TEAM-01',
     deptId: 'DEPT-01',
@@ -64,6 +70,9 @@ export const INITIAL_TASKS: Task[] = [
     status: TaskStatus.SUBMITTED,
     priority: 'LOW',
     deadline: NOW + ONE_HOUR * 24,
+    startDate: NOW + ONE_HOUR * 4,
+    estimatedDuration: 600, // 10 hours
+    dependencies: ['TASK-01'], // Wait for SDK update
     assigneeId: 'USER-05',
     teamId: 'TEAM-03',
     deptId: 'DEPT-02',

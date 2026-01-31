@@ -1,68 +1,95 @@
 import React, { useState, useEffect } from 'react';
 import { User, UserRole, Project } from './types';
 import { USERS, MOCK_ORG_ID } from './mockData';
+import { userAPI, projectAPI } from './api/client';
 
 interface ProjectManagerProps {
     currentUser: User;
+    onProjectsChange?: (projects: Project[]) => void;
 }
 
-export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser }) => {
+export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser, onProjectsChange }) => {
     const [projects, setProjects] = useState<Project[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newProject, setNewProject] = useState({ name: '', description: '' });
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Load Projects
-        const storedProjectsStr = localStorage.getItem('AEIP_PROJECTS');
-        if (storedProjectsStr) {
-            setProjects(JSON.parse(storedProjectsStr));
-        }
+        const loadData = async () => {
+            try {
+                setLoading(true);
+                // Load users from MongoDB
+                const loadedUsers = await userAPI.getAll();
+                setUsers(loadedUsers);
 
-        // Load Users
-        const storedUsersStr = localStorage.getItem('AEIP_USERS');
-        if (storedUsersStr) {
-            setUsers(JSON.parse(storedUsersStr));
-        } else {
-            setUsers(USERS);
-        }
+                // Load projects from MongoDB
+                const loadedProjects = await projectAPI.getAll();
+                setProjects(loadedProjects);
+                console.log('📁 ProjectManager loaded:', loadedProjects.length, 'projects');
+            } catch (error) {
+                console.error('Failed to load data:', error);
+                // Fallback to mock data
+                setUsers(USERS);
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadData();
     }, []);
 
-    const saveProjects = (updatedProjects: Project[]) => {
-        setProjects(updatedProjects);
-        localStorage.setItem('AEIP_PROJECTS', JSON.stringify(updatedProjects));
+    const refreshProjects = async () => {
+        try {
+            const loadedProjects = await projectAPI.getAll();
+            setProjects(loadedProjects);
+            if (onProjectsChange) {
+                onProjectsChange(loadedProjects);
+            }
+        } catch (error) {
+            console.error('Failed to refresh projects:', error);
+        }
     };
 
-    const handleCreateProject = (e: React.FormEvent) => {
+    const handleCreateProject = async (e: React.FormEvent) => {
         e.preventDefault();
-        const project: Project = {
-            id: `PROJ-${Date.now()}`,
-            name: newProject.name,
-            description: newProject.description,
-            orgId: MOCK_ORG_ID,
-            memberIds: [],
-            status: 'ACTIVE',
-            createdAt: Date.now(),
-        };
-        saveProjects([...projects, project]);
-        setShowCreateModal(false);
-        setNewProject({ name: '', description: '' });
+        try {
+            const leadId = currentUser.role === UserRole.TEAM_LEAD ? currentUser.id : undefined;
+            const newProj = await projectAPI.create({
+                name: newProject.name,
+                description: newProject.description,
+                orgId: MOCK_ORG_ID
+            }, leadId);
+
+            console.log('✅ Project created:', newProj);
+            await refreshProjects();
+            setShowCreateModal(false);
+            setNewProject({ name: '', description: '' });
+        } catch (error: any) {
+            console.error('Failed to create project:', error);
+            alert(`Failed to create project: ${error.message}`);
+        }
     };
 
-    const handleAssignLead = (projectId: string, leadId: string) => {
-        const updated = projects.map(p =>
-            p.id === projectId ? { ...p, leadId } : p
-        );
-        saveProjects(updated);
+    const handleAssignLead = async (projectId: string, leadId: string) => {
+        try {
+            await projectAPI.update(projectId, { leadId });
+            await refreshProjects();
+        } catch (error: any) {
+            console.error('Failed to assign lead:', error);
+            alert(`Failed to assign lead: ${error.message}`);
+        }
     };
 
-    const handleAddMember = (projectId: string, memberId: string) => {
+    const handleAddMember = async (projectId: string, memberId: string) => {
         const project = projects.find(p => p.id === projectId);
         if (project && !project.memberIds.includes(memberId)) {
-            const updated = projects.map(p =>
-                p.id === projectId ? { ...p, memberIds: [...p.memberIds, memberId] } : p
-            );
-            saveProjects(updated);
+            try {
+                await projectAPI.addMember(projectId, memberId);
+                await refreshProjects();
+            } catch (error: any) {
+                console.error('Failed to add member:', error);
+                alert(`Failed to add member: ${error.message}`);
+            }
         }
     };
 
@@ -86,7 +113,7 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({ currentUser }) =
                             currentUser.role === UserRole.TEAM_LEAD ? 'My Assigned Projects' : 'My Active Projects'}
                     </p>
                 </div>
-                {currentUser.role === UserRole.ADMIN && (
+                {(currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.TEAM_LEAD) && (
                     <button
                         onClick={() => setShowCreateModal(true)}
                         className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-lg hover:bg-slate-700 transition"

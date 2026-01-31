@@ -1,34 +1,33 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Task, TaskStatus, User, DecisionLog, ActionType, UserRole
+  Task, TaskStatus, User, DecisionLog, ActionType, UserRole, Project
 } from './types';
 import {
   INITIAL_TASKS, USERS, DEPARTMENTS, TEAMS
 } from './mockData';
 import { runMonitoringCycle } from './agentService';
-import { Icons } from './constants';
+import { Icons, ALL_SKILLS } from './constants';
 import { Auth } from './Auth';
 import { ProjectManager } from './ProjectManager';
 import { initMemories } from './vectorStore';
+import { autoAssignTask, getSkillMatchPercentage } from './assignmentService';
+import { SkillManager } from './SkillManager';
+import { GanttChart } from './GanttChart';
+import { userAPI, taskAPI, projectAPI } from './api/client';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [viewMode, setViewMode] = useState<'LIST' | 'GANTT'>('LIST');
+  const [users, setUsers] = useState<User[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [logs, setLogs] = useState<DecisionLog[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [lastRun, setLastRun] = useState<number>(Date.now());
-
-  // Restore session
-  useEffect(() => {
-    const savedUser = localStorage.getItem('AEIP_CURRENT_USER');
-    if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
-    }
-    // Initialize RAG Service with mock data
-    initMemories();
-  }, []);
+  const [showSkillManager, setShowSkillManager] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
@@ -40,24 +39,87 @@ const App: React.FC = () => {
     localStorage.removeItem('AEIP_CURRENT_USER');
   };
 
+  // Load data from MongoDB API
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoading(true);
+
+        // Restore session from localStorage
+        const savedUser = localStorage.getItem('AEIP_CURRENT_USER');
+        if (savedUser) {
+          setCurrentUser(JSON.parse(savedUser));
+        }
+
+        // Load users from MongoDB
+        const loadedUsers = await userAPI.getAll();
+        setUsers(loadedUsers);
+        console.log('👥 Loaded users from MongoDB:', loadedUsers.length, 'users');
+
+        // Load tasks from MongoDB
+        const loadedTasks = await taskAPI.getAll();
+        setTasks(loadedTasks);
+        console.log('📋 Loaded tasks from MongoDB:', loadedTasks.length, 'tasks');
+
+        // Load projects from MongoDB
+        const loadedProjects = await projectAPI.getAll();
+        setProjects(loadedProjects);
+        console.log('📁 Loaded projects from MongoDB:', loadedProjects.length, 'projects');
+
+      } catch (error) {
+        console.error('Failed to load data from MongoDB:', error);
+        console.log('⚠️ Using fallback mock data');
+        // Fallback to mock data if API fails
+        setUsers(USERS);
+        setTasks(INITIAL_TASKS);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
+
+    // Initialize RAG Service with mock data
+    initMemories();
+  }, []);
+
   // Autonomous loop simulator
+  const isMonitoringRef = React.useRef(false);
+
   useEffect(() => {
     if (!currentUser) return;
 
     const interval = setInterval(async () => {
-      setIsMonitoring(true);
-      await runMonitoringCycle(
-        tasks,
-        USERS, // Note: In a real app we'd pass the full dynamic user list here
-        (log) => setLogs(prev => [log, ...prev]),
-        (updatedTasks) => setTasks(updatedTasks)
-      );
-      setLastRun(Date.now());
-      setIsMonitoring(false);
+      if (isMonitoringRef.current) {
+        console.log('⏳ Skipping monitoring cycle - previous cycle still active');
+        return;
+      }
+
+      try {
+        isMonitoringRef.current = true;
+        setIsMonitoring(true);
+
+        await runMonitoringCycle(
+          tasks,
+          users,
+          (log) => setLogs(prev => [log, ...prev]),
+          (updatedTasks) => {
+            setTasks(updatedTasks);
+            localStorage.setItem('AEIP_TASKS', JSON.stringify(updatedTasks));
+          }
+        );
+
+        setLastRun(Date.now());
+      } catch (err) {
+        console.error("Monitoring cycle error:", err);
+      } finally {
+        setIsMonitoring(false);
+        isMonitoringRef.current = false;
+      }
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [tasks, currentUser]);
+  }, [tasks, currentUser, users]);
 
   // Filter tasks based on role
   const filteredTasks = useMemo(() => {
@@ -70,7 +132,15 @@ const App: React.FC = () => {
         // Show tasks for team or if lead is explicitly assigned
         return tasks.filter(t => t.teamId === currentUser.teamId);
       case UserRole.ASSIGNEE:
-        return tasks.filter(t => t.assigneeId === currentUser.id);
+        // Show tasks assigned to user OR belonging to projects user is a member of
+        const userProjectIds = projects
+          .filter(p => p.memberIds.includes(currentUser.id))
+          .map(p => p.id);
+
+        return tasks.filter(t =>
+          t.assigneeId === currentUser.id ||
+          (t.projectId && userProjectIds.includes(t.projectId))
+        );
       default:
         return [];
     }
@@ -85,6 +155,10 @@ const App: React.FC = () => {
     logs.filter(l => l.taskId === selectedTaskId),
     [logs, selectedTaskId]
   );
+
+  if (!currentUser) {
+    return <Auth onLogin={handleLogin} />;
+  }
 
   const getStatusColor = (status: TaskStatus) => {
     switch (status) {
@@ -106,27 +180,72 @@ const App: React.FC = () => {
     }
   };
 
-  const handleCreateTask = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleCreateTask = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!currentUser) return;
     const formData = new FormData(e.currentTarget);
-    const newTask: Task = {
-      id: `TASK-${Date.now()}`,
-      title: formData.get('title') as string,
-      description: formData.get('description') as string,
-      status: TaskStatus.CREATED,
-      priority: formData.get('priority') as any,
-      deadline: Date.now() + parseInt(formData.get('deadline') as string) * 60 * 1000,
-      assigneeId: formData.get('assigneeId') as string || currentUser.id,
-      teamId: currentUser.teamId,
-      deptId: currentUser.deptId,
-      orgId: 'ORG-001',
-      riskScore: 0,
-      lastAction: ActionType.NONE,
-      updatedAt: Date.now()
-    };
-    setTasks(prev => [newTask, ...prev]);
-    e.currentTarget.reset();
+
+    // Get selected skills from form
+    const skillsSelect = e.currentTarget.querySelector('select[name="requiredSkills"]') as HTMLSelectElement;
+    const selectedSkills = skillsSelect ? Array.from(skillsSelect.selectedOptions).map(opt => opt.value) : [];
+
+    // Get assignee from dropdown (optional - backend will auto-assign if not provided)
+    const manualAssigneeId = formData.get('assigneeId') as string;
+
+    try {
+      // Prepare task data
+      const taskData = {
+        title: formData.get('title') as string,
+        description: (formData.get('description') as string) || 'Task created via workflow delegation',
+        priority: formData.get('priority') as string,
+        deadline: Date.now() + parseInt(formData.get('deadline') as string) * 60 * 1000,
+        teamId: currentUser.teamId,
+        deptId: currentUser.deptId,
+        orgId: 'ORG-001',
+        projectId: formData.get('projectId') as string || undefined,
+        requiredSkills: selectedSkills.length > 0 ? selectedSkills : undefined,
+        assigneeId: manualAssigneeId || undefined // Let backend auto-assign if empty
+      };
+
+      console.log('📤 Creating task with data:', taskData);
+
+      // Create task via MongoDB API (backend handles auto-assignment)
+      const newTask = await taskAPI.create(taskData);
+
+      console.log('✅ Task created:', newTask);
+
+      // Add to local state
+      setTasks([newTask, ...tasks]);
+      // Reset form safely
+      const form = e.currentTarget;
+      if (form) form.reset();
+    } catch (error: any) {
+      console.error('Failed to create task:', error);
+      alert(`Failed to create task: ${error.message}`);
+    }
+  };
+
+  const handleCompleteTask = async (taskId: string) => {
+    try {
+      console.log(`📝 Completing task ${taskId} automatically...`);
+
+      // Complete task via API (no args - let backend auto-calculate)
+      const completedTask = await taskAPI.complete(taskId);
+
+      console.log('✅ Task completed:', completedTask);
+
+      // Update local state
+      setTasks(tasks.map(t => t.id === taskId ? completedTask : t));
+
+      alert(`Task completed automatically!\n\nUse: Time spent has been calculated based on assignment duration.`);
+    } catch (error: any) {
+      console.error('Failed to complete task:', error);
+      alert(`Failed to complete task: ${error.message}`);
+    }
+  };
+
+  const handleUpdateSkills = (updatedUser: User) => {
+    setCurrentUser(updatedUser);
   };
 
   if (!currentUser) {
@@ -160,6 +279,33 @@ const App: React.FC = () => {
           <div className="flex items-center gap-3 px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg cursor-pointer transition">
             <Icons.Alert />
             <span>Risk Center</span>
+          </div>
+
+          {/* User Skills Section */}
+          <div className="mt-6 p-3 bg-slate-800/50 rounded-xl">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-bold text-slate-400 uppercase">Your Skills</p>
+              <button
+                onClick={() => setShowSkillManager(true)}
+                className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold uppercase underline"
+              >
+                Manage
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {currentUser.skills && currentUser.skills.length > 0 ? (
+                currentUser.skills.slice(0, 6).map(skill => (
+                  <span key={skill} className="text-[9px] px-2 py-1 bg-indigo-500/20 text-indigo-300 rounded-md font-medium border border-indigo-500/30">
+                    {skill}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[10px] text-slate-500 italic">No skills added</span>
+              )}
+            </div>
+            {currentUser.skills && currentUser.skills.length > 6 && (
+              <p className="text-[9px] text-slate-500 mt-1">+{currentUser.skills.length - 6} more</p>
+            )}
           </div>
         </nav>
 
@@ -201,19 +347,44 @@ const App: React.FC = () => {
             <p className="text-slate-500 text-sm">Welcome back, {currentUser.name}. Monitoring {filteredTasks.length} active threads.</p>
           </div>
           <div className="flex gap-2">
+            {/* View Mode Toggle */}
+            <div className="bg-white p-1 rounded-lg border flex items-center">
+              <button
+                onClick={() => setViewMode('LIST')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'LIST' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Icons.Task />
+                  <span>LIST</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setViewMode('GANTT')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'GANTT' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>📊</span>
+                  <span>GANTT</span>
+                </div>
+              </button>
+            </div>
+
             <div className="bg-white px-3 py-2 rounded-lg border flex items-center gap-3">
               <div className="text-right">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Personal Reliability</p>
-                <p className="text-sm font-bold text-slate-700">{(currentUser.reliabilityScore * 100).toFixed(0)}%</p>
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Performance Score</p>
+                <p className="text-sm font-bold text-slate-700">{(currentUser.reliabilityScore * 10).toFixed(1)}/10</p>
               </div>
               <div className="w-10 h-10 rounded-full border-4 border-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-600">
-                {currentUser.reliabilityScore > 0.9 ? 'S+' : 'A'}
+                {currentUser.reliabilityScore >= 0.9 ? 'S+' : currentUser.reliabilityScore >= 0.7 ? 'A' : 'B'}
               </div>
             </div>
           </div>
         </header>
 
-        <ProjectManager currentUser={currentUser} />
+        <ProjectManager
+          currentUser={currentUser}
+          onProjectsChange={(updatedProjects) => setProjects(updatedProjects)}
+        />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           {/* Left Column: Actions & Tasks */}
@@ -243,11 +414,57 @@ const App: React.FC = () => {
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">TTL (Minutes)</label>
                     <input name="deadline" type="number" defaultValue="10" className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium" />
                   </div>
+                  <div className="md:col-span-4">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                      Assign to Project (Optional)
+                    </label>
+                    <select
+                      name="projectId"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium"
+                    >
+                      <option value="">No Project (General Task)</option>
+                      {projects.filter(p =>
+                        currentUser.role === UserRole.ADMIN ||
+                        p.leadId === currentUser.id ||
+                        p.memberIds.includes(currentUser.id)
+                      ).map(project => (
+                        <option key={project.id} value={project.id}>
+                          {project.name} {project.leadId === currentUser.id ? '(You lead)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[9px] text-slate-400 mt-1">
+                      {projects.length === 0
+                        ? '⚠️ No projects found. Create a project in "Project Management" section above first.'
+                        : `Link this task to a specific project for better organization (${projects.filter(p => currentUser.role === UserRole.ADMIN || p.leadId === currentUser.id || p.memberIds.includes(currentUser.id)).length} available)`
+                      }
+                    </p>
+                  </div>
+                  <div className="md:col-span-4">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                      Required Skills (Auto-assigns to best match)
+                    </label>
+                    <select
+                      name="requiredSkills"
+                      multiple
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium max-h-24"
+                    >
+                      {ALL_SKILLS.slice(0, 15).map(skill => (
+                        <option key={skill} value={skill}>{skill}</option>
+                      ))}
+                    </select>
+                    <p className="text-[9px] text-slate-400 mt-1">
+                      💡 Selecting skills will auto-assign to employee with best skill+performance match
+                    </p>
+                  </div>
                   <div className="md:col-span-4 flex gap-2">
                     <select name="assigneeId" className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium">
-                      <option value="">Auto-Assign (Based on Reliability)</option>
-                      {USERS.filter(u => u.deptId === currentUser.deptId || currentUser.role === UserRole.ADMIN).map(u => (
-                        <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                      <option value="">🤖 Auto-Assign (Skill + Performance Match)</option>
+                      {USERS.filter(u =>
+                        (u.deptId === currentUser.deptId || currentUser.role === UserRole.ADMIN) &&
+                        u.role !== UserRole.ADMIN
+                      ).map(u => (
+                        <option key={u.id} value={u.id}>{u.name} ({u.role}) - {(u.reliabilityScore * 10).toFixed(1)}/10</option>
                       ))}
                     </select>
                     <button type="submit" className="bg-slate-800 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-600 transition shadow-lg shadow-slate-800/10">Deploy</button>
@@ -275,91 +492,138 @@ const App: React.FC = () => {
             )}
 
             {/* Main Task Feed */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-5 border-b flex justify-between items-center bg-slate-50/50">
-                <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                  <Icons.Task />
-                  Operational Monitor
-                </h3>
-                <div className="flex gap-2">
-                  <span className="px-2 py-1 bg-white border text-[10px] font-bold rounded text-slate-500">REAL-TIME</span>
+            {viewMode === 'LIST' ? (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-5 border-b flex justify-between items-center bg-slate-50/50">
+                  <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                    <Icons.Task />
+                    Operational Monitor
+                  </h3>
+                  <div className="flex gap-2">
+                    <span className="px-2 py-1 bg-white border text-[10px] font-bold rounded text-slate-500">REAL-TIME</span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50/50 text-slate-400 uppercase text-[10px] font-bold">
+                      <tr>
+                        <th className="px-6 py-4">Context</th>
+                        <th className="px-6 py-4">Assignee / Project</th>
+                        <th className="px-6 py-4">Status</th>
+                        <th className="px-6 py-4">TTL</th>
+                        <th className="px-6 py-4">Execution Risk</th>
+                        <th className="px-6 py-4">Agentic Response</th>
+                        <th className="px-6 py-4">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredTasks.map(task => (
+                        <tr
+                          key={task.id}
+                          onClick={() => setSelectedTaskId(task.id)}
+                          className={`hover:bg-indigo-50/30 cursor-pointer transition-colors ${selectedTaskId === task.id ? 'bg-indigo-50' : ''}`}
+                        >
+                          <td className="px-6 py-4">
+                            <div className="font-bold text-slate-800">{task.title}</div>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${task.priority === 'HIGH' ? 'text-red-600 border-red-100 bg-red-50' : 'text-slate-500 border-slate-200'}`}>
+                                {task.priority}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-medium truncate max-w-[120px]">
+                                👤 {users.find(u => u.id === task.assigneeId)?.name || 'Unassigned'}
+                              </span>
+                              {task.requiredSkills && task.requiredSkills.length > 0 && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100">
+                                  {task.requiredSkills.length} skill{task.requiredSkills.length > 1 ? 's' : ''} req.
+                                </span>
+                              )}
+                              {task.projectId && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 border border-purple-100">
+                                  📁 {projects.find(p => p.id === task.projectId)?.name || 'Project'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-slate-700">
+                                  👤 {users.find(u => u.id === task.assigneeId)?.name || 'Unassigned'}
+                                </span>
+                              </div>
+                              {task.projectId && (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 border border-purple-100">
+                                    📁 {projects.find(p => p.id === task.projectId)?.name || 'Project'}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${getStatusColor(task.status)}`}>
+                              {task.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                            {task.deadline < Date.now() ? (
+                              <span className="text-red-500 font-bold">LATE</span>
+                            ) : (
+                              `${Math.ceil((task.deadline - Date.now()) / (1000 * 60))}m`
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 bg-slate-100 h-1.5 rounded-full overflow-hidden w-20">
+                                <div
+                                  className={`h-full transition-all duration-500 ${task.riskScore > 75 ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : task.riskScore > 40 ? 'bg-amber-400' : 'bg-green-400'}`}
+                                  style={{ width: `${task.riskScore}%` }}
+                                />
+                              </div>
+                              <span className={`text-[10px] font-bold ${task.riskScore > 75 ? 'text-red-500' : 'text-slate-400'}`}>
+                                {task.riskScore}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">{getActionIcon(task.lastAction)}</span>
+                              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight">
+                                {task.lastAction === ActionType.NONE ? 'Scanning' : task.lastAction.replace('_', ' ')}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            {task.status !== 'COMPLETED' && task.assigneeId === currentUser.id && (
+                              <button
+                                onClick={() => handleCompleteTask(task.id)}
+                                className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-[10px] font-bold rounded-lg transition-colors"
+                              >
+                                ✓ Complete
+                              </button>
+                            )}
+                            {task.status === 'COMPLETED' && (
+                              <span className="text-[10px] text-green-600 font-bold">
+                                ✓ Done
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredTasks.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-20 text-center text-slate-400 italic">
+                            No active monitoring threads found in your current scope.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50/50 text-slate-400 uppercase text-[10px] font-bold">
-                    <tr>
-                      <th className="px-6 py-4">Context</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4">TTL</th>
-                      <th className="px-6 py-4">Execution Risk</th>
-                      <th className="px-6 py-4">Agentic Response</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredTasks.map(task => (
-                      <tr
-                        key={task.id}
-                        onClick={() => setSelectedTaskId(task.id)}
-                        className={`hover:bg-indigo-50/30 cursor-pointer transition-colors ${selectedTaskId === task.id ? 'bg-indigo-50' : ''}`}
-                      >
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-slate-800">{task.title}</div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${task.priority === 'HIGH' ? 'text-red-600 border-red-100 bg-red-50' : 'text-slate-500 border-slate-200'}`}>
-                              {task.priority}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-medium truncate max-w-[120px]">
-                              @{USERS.find(u => u.id === task.assigneeId)?.name}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${getStatusColor(task.status)}`}>
-                            {task.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                          {task.deadline < Date.now() ? (
-                            <span className="text-red-500 font-bold">LATE</span>
-                          ) : (
-                            `${Math.ceil((task.deadline - Date.now()) / (1000 * 60))}m`
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 bg-slate-100 h-1.5 rounded-full overflow-hidden w-20">
-                              <div
-                                className={`h-full transition-all duration-500 ${task.riskScore > 75 ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : task.riskScore > 40 ? 'bg-amber-400' : 'bg-green-400'}`}
-                                style={{ width: `${task.riskScore}%` }}
-                              />
-                            </div>
-                            <span className={`text-[10px] font-bold ${task.riskScore > 75 ? 'text-red-500' : 'text-slate-400'}`}>
-                              {task.riskScore}%
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">{getActionIcon(task.lastAction)}</span>
-                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight">
-                              {task.lastAction === ActionType.NONE ? 'Scanning' : task.lastAction.replace('_', ' ')}
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {filteredTasks.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-6 py-20 text-center text-slate-400 italic">
-                          No active monitoring threads found in your current scope.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            ) : (
+              <GanttChart tasks={filteredTasks} users={users} />
+            )}
           </div>
 
           {/* Right Column: AI Trace Panel */}
@@ -441,8 +705,19 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
-      </main>
-    </div>
+      </main >
+
+      {/* Skill Manager Modal */}
+      {
+        showSkillManager && (
+          <SkillManager
+            currentUser={currentUser}
+            onUpdateSkills={handleUpdateSkills}
+            onClose={() => setShowSkillManager(false)}
+          />
+        )
+      }
+    </div >
   );
 };
 
